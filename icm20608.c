@@ -83,15 +83,25 @@ static void icm20608_write_onereg(struct icm20608_dev *dev, u8 reg, u8 value)
 
 void icm20608_reginit(struct icm20608_dev *dev)
 {
-    u8 value = 0;
+    u8 value = 0,check = 0;
+    value = icm20608_read_onereg(dev, ICM20_WHO_AM_I);
+	printk("ICM20608 ID = %#X\r\n", value);	
+    if(value != 0xAE){
+        printk("Error: Wrong ID 0x%02X, SPI communication failed!\n", id);
+        return -ENODEV;  // 返回错误，说明芯片没焊好或 SPI 没配好
+    }
 	
 	icm20608_write_onereg(dev, ICM20_PWR_MGMT_1, 0x80);
-	mdelay(50);
-	icm20608_write_onereg(dev, ICM20_PWR_MGMT_1, 0x01);
-	mdelay(50);
+	mdelay(100);
+	icm20608_write_onereg(dev, ICM20_PWR_MGMT_1, 0x00);
+    icm20608_write_onereg(dev, ICM20_PWR_MGMT_2, 0x00);
+	mdelay(10);
 
-	value = icm20608_read_onereg(dev, ICM20_WHO_AM_I);
-	printk("ICM20608 ID = %#X\r\n", value);	
+    check = icm20608_read_onereg(dev, ICM20_PWR_MGMT_1);
+    if (check != 0x00) {
+        printk("Error: Write to PWR_MGMT_1 failed! Read back 0x%02X\n", check);
+        return -EIO;  // 写不进去，硬件有问题
+    }
 
 	icm20608_write_onereg(dev, ICM20_SMPLRT_DIV, 0x00); 	/* 输出速率是内部采样率					*/
 	icm20608_write_onereg(dev, ICM20_GYRO_CONFIG, 0x18); 	/* 陀螺仪±2000dps量程 				*/
@@ -142,22 +152,6 @@ static ssize_t icm20608_read(struct file *filp, char __user *buf, size_t cnt, lo
         return -EFAULT;
     }
     return copy_size;
-}
-
-static ssize_t icm20608_write(struct file *filp, const char __user *buf, size_t cnt, loff_t *off)
-{
-    return 0;
-}
-
-static int icm20608_open(struct inode *inode, struct file *filp)
-{
-    filp->private_data  = container_of(inode->i_cdev, struct icm20608_dev, cdev);
-    return 0;
-}
-
-static int icm20608_release (struct inode *inode, struct file *filp)
-{
-    return 0;
 }
 
 static struct file_operations icm20608_opts = {

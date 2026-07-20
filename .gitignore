@@ -1,0 +1,18 @@
+# 编译产物
+*.o
+*.ko
+*.mod.c
+*.mod
+*.symvers
+Module.symvers
+modules.order
+*.cmd
+
+# 编辑器临时文件
+*.swp
+*.swo
+*~
+
+# 其他
+*.log
+*.tmp
