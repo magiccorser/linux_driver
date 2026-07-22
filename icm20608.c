@@ -21,7 +21,10 @@ struct icm20608_dev{
     struct spi_device *m_spi_device;
     struct device_node *nd;
     struct icm20608_data data;
+    bool read_available = false;
 };
+
+static struct timer_list read_timer;
 
 static int icm20608_read_regs(struct icm20608_dev *dev, u8 reg, void *buf, int len)
 {
@@ -81,13 +84,13 @@ static void icm20608_write_onereg(struct icm20608_dev *dev, u8 reg, u8 value)
 	icm20608_write_regs(dev, reg, &buf, 1);
 }
 
-void icm20608_reginit(struct icm20608_dev *dev)
+int icm20608_reginit(struct icm20608_dev *dev)
 {
     u8 value = 0,check = 0;
     value = icm20608_read_onereg(dev, ICM20_WHO_AM_I);
 	printk("ICM20608 ID = %#X\r\n", value);	
     if(value != 0xAE){
-        printk("Error: Wrong ID 0x%02X, SPI communication failed!\n", id);
+        printk("Error: Wrong ID 0x%02X, SPI communication failed!\n", value);
         return -ENODEV;  // 返回错误，说明芯片没焊好或 SPI 没配好
     }
 	
@@ -103,14 +106,14 @@ void icm20608_reginit(struct icm20608_dev *dev)
         return -EIO;  // 写不进去，硬件有问题
     }
 
-	icm20608_write_onereg(dev, ICM20_SMPLRT_DIV, 0x00); 	/* 输出速率是内部采样率					*/
-	icm20608_write_onereg(dev, ICM20_GYRO_CONFIG, 0x18); 	/* 陀螺仪±2000dps量程 				*/
 	icm20608_write_onereg(dev, ICM20_ACCEL_CONFIG, 0x18); 	/* 加速度计±16G量程 					*/
-	icm20608_write_onereg(dev, ICM20_CONFIG, 0x04); 		/* 陀螺仪低通滤波BW=20Hz 				*/
 	icm20608_write_onereg(dev, ICM20_ACCEL_CONFIG2, 0x04); /* 加速度计低通滤波BW=21.2Hz 			*/
-	icm20608_write_onereg(dev, ICM20_PWR_MGMT_2, 0x00); 	/* 打开加速度计和陀螺仪所有轴 				*/
+	icm20608_write_onereg(dev, ICM20_GYRO_CONFIG, 0x18); 	/* 陀螺仪±2000dps量程 				*/
+	icm20608_write_onereg(dev, ICM20_CONFIG, 0x04); 		/* 陀螺仪低通滤波BW=20Hz 				*/
+	icm20608_write_onereg(dev, ICM20_SMPLRT_DIV, 0x09); 	/* 输出速率是内部采样率					*/
 	icm20608_write_onereg(dev, ICM20_LP_MODE_CFG, 0x00); 	/* 关闭低功耗 						*/
 	icm20608_write_onereg(dev, ICM20_FIFO_EN, 0x00);		/* 关闭FIFO						*/
+    return 0;
 }
 
 void readdata(struct icm20608_dev *dev)
@@ -128,6 +131,14 @@ void readdata(struct icm20608_dev *dev)
 
 }
 
+static void read_timer_callback(unsigned long data)
+{
+    struct icm20608_dev *dev = (struct icm20608_dev *)data;
+
+    dev->available = true;
+    mod_timer(&read_timer, jiffies + msecs_to_jiffies(10));
+}
+
 static ssize_t icm20608_read(struct file *filp, char __user *buf, size_t cnt, loff_t *off)
 {
     unsigned int data[7];
@@ -135,6 +146,10 @@ static ssize_t icm20608_read(struct file *filp, char __user *buf, size_t cnt, lo
     size_t data_size = sizeof(data);
     size_t copy_size;
     struct icm20608_dev *dev = filp->private_data;
+    if(!dev->read_available){
+        mod_timer(&read_timer, jiffies + msecs_to_jiffies(10));
+    }
+    dev->read_available = false;
     struct icm20608_data *icm20608_data = &dev->data;
     if(cnt == 0) return -EFAULT;
     readdata(dev);
@@ -154,12 +169,16 @@ static ssize_t icm20608_read(struct file *filp, char __user *buf, size_t cnt, lo
     return copy_size;
 }
 
+static int icm20608_open(struct inode *inode, struct file *filp)
+{
+    filp->private_data  = container_of(inode->i_cdev, struct icm20608_dev, cdev);
+    return 0;
+}
+
 static struct file_operations icm20608_opts = {
     .owner = THIS_MODULE,
     .open = icm20608_open,
-    .release = icm20608_release,
     .read = icm20608_read,
-    .write = icm20608_write,
 };
 
 static struct of_device_id icm20608_of_match[] = {
@@ -215,6 +234,9 @@ static int icm20608_probe(struct spi_device *spi)
 	dev->m_spi_device = spi;
     icm20608_reginit(dev);
     spi_set_drvdata(spi, dev);
+    init_timer(&read_timer);
+    read_timer.function = read_timer_callback;
+    read_timer.data = (unsigned long) dev;
     return ret;
 }
 
@@ -225,6 +247,7 @@ static int icm20608_remove(struct spi_device *spi){
     cdev_del(&dev->cdev);
     unregister_chrdev_region(dev->devid, MODULE_NUM);
     gpio_free(dev->gpioid);
+    del_timer_sync(&read_timer);
     return 0;
 }
 

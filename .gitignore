@@ -16,3 +16,4 @@ modules.order
 # 其他
 *.log
 *.tmp
+.vscode
