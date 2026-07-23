@@ -21,7 +21,8 @@ struct icm20608_dev{
     struct spi_device *m_spi_device;
     struct device_node *nd;
     struct icm20608_data data;
-    bool read_available = false;
+    bool read_available;
+    wait_queue_head_t wq;
 };
 
 static struct timer_list read_timer;
@@ -134,8 +135,9 @@ void readdata(struct icm20608_dev *dev)
 static void read_timer_callback(unsigned long data)
 {
     struct icm20608_dev *dev = (struct icm20608_dev *)data;
-
-    dev->available = true;
+    readdata(dev);
+    dev->read_available = true;
+    wake_up_interruptible(&dev->wq);
     mod_timer(&read_timer, jiffies + msecs_to_jiffies(10));
 }
 
@@ -145,14 +147,13 @@ static ssize_t icm20608_read(struct file *filp, char __user *buf, size_t cnt, lo
     int ret;
     size_t data_size = sizeof(data);
     size_t copy_size;
-    struct icm20608_dev *dev = filp->private_data;
-    if(!dev->read_available){
-        mod_timer(&read_timer, jiffies + msecs_to_jiffies(10));
-    }
-    dev->read_available = false;
-    struct icm20608_data *icm20608_data = &dev->data;
+    struct icm20608_data *icm20608_data;
+    struct icm20608_dev *dev;
+    dev = filp->private_data;
     if(cnt == 0) return -EFAULT;
-    readdata(dev);
+    if(wait_event_interruptible(dev->wq, dev->read_available)) return -ERESTARTSYS;
+    dev->read_available = false;
+    icm20608_data = &dev->data;
     data[0] = icm20608_data->accel_x_adc;
     data[1] = icm20608_data->accel_y_adc;
     data[2] = icm20608_data->accel_z_adc;
@@ -237,6 +238,7 @@ static int icm20608_probe(struct spi_device *spi)
     init_timer(&read_timer);
     read_timer.function = read_timer_callback;
     read_timer.data = (unsigned long) dev;
+    mod_timer(&read_timer, jiffies + msecs_to_jiffies(10));
     return ret;
 }
 
